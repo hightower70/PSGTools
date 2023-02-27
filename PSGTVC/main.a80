@@ -1,0 +1,166 @@
+        ;---------------------------------------------------------------------
+        ; TVComputer MULTICART ROM Unmount Program
+        ; (c) 2023 Laszlo Arvai
+        ;---------------------------------------------------------------------
+        include "definitions.a80"
+
+        org     PROGRAM_START_ADDRESS
+
+        db      $0f, $01, $00, $58, $9a, "USR", $96, "6693", $95, $ff, $00                                         ; 1 X=USR(6722)
+
+        ; BASIC SYMBOL TABLE
+        ds      38                              ; Storage for BASIC symbol table    
+
+        ; Program start
+        jr      START
+
+        ; ** Variables **
+
+IX_SAVE  dw     0                               ; Saves IX, and IY registers and shadow registers because it is used by the basic
+IY_SAVE  dw     0
+BCS_SAVE dw     0
+DES_SAVE dw     0
+HLS_SAVE dw     0
+
+        ; ** Program start **
+START:
+        ; save IX, IY
+        ld      (IX_SAVE), ix
+        ld      (IY_SAVE), iy
+
+        ; save some shadow registers
+        exx
+        ld      (BCS_SAVE), bc
+        ld      (DES_SAVE), de
+        ld      (HLS_SAVE), hl
+        exx
+
+        ; detect and init sound card
+        call    DetectSndCard
+        ld      a, (SndCardType)                ; check if card is exists
+        or      a
+        jr      nz, InitPlayer
+        
+        ; display error message
+        ld      de, NO_SOUND_CARD_FOUND
+        ld      bc, NO_SOUND_CARD_FOUND_LENGTH
+        rst     $30
+        db      VID_BKOUT
+
+        jr      ExitToBasic
+
+InitPlayer:
+        ; display title
+        ld      de, PSG_PLAYER_TITLE
+        ld      bc, PSG_PLAYER_TITLE_LENGTH
+        rst     $30
+        db      VID_BKOUT
+
+        ; Initialize music player
+        call    InitMusicPlayer
+
+        ; initialize interrupt handler
+        call    InitInterrupt
+
+        ; starts music palyer
+        ld      hl, PSGFileData
+        ld      (PSGFile), hl
+         
+        call    StartMusic
+
+WaitForKey:
+        halt                                    ; wait for interrupt (and keyboard scan)
+
+        rst     30h                             ; read keyboard status
+        db      KBD_STATUS
+        ld      a, c
+        cp      a, $ff
+        jr      nz, WaitForKey                  ; if no key pressed -> wait
+
+        rst     30h                             ; when key is pressed
+        db      KBD_CHIN
+
+        ld      a, c
+        cp      ESCAPE
+        jp      nz, WaitForKey
+
+     
+        ; restore interrupt
+        call    RestoreInterrupt
+
+        ; stop music playback
+        call    StopMusic
+
+ExitToBasic:  
+        ; restore some shadow registers
+        exx
+        ld      bc, (BCS_SAVE)
+        ld      de, (DES_SAVE)
+        ld      hl, (HLS_SAVE)
+        exx
+
+        ; restore IX, IY
+        ld      ix, (IX_SAVE)
+        ld      iy, (IY_SAVE)
+
+        ret
+
+        ;---------------------------------------------------------------------
+        ; Initialize custom interrupt handler
+InitInterrupt:
+        di
+
+        ld      hl, (IT_VECTOR_ADDR)            ; save original IT vector
+        ld      (ItVectorSave+1), hl
+
+        ld      hl, InterruptEntry         ; redirect interrupt to music player routine
+        ld      (IT_VECTOR_ADDR), hl
+
+        ei
+
+        ret
+        
+        ;---------------------------------------------------------------------
+        ; Deinitialize custom interrupt handler
+RestoreInterrupt:
+        di
+        
+        ld      hl, (ItVectorSave+1)         ; restore IT vector address
+        ld      (IT_VECTOR_ADDR), hl
+
+        ei
+        
+        ret
+
+        ;---------------------------------------------------------------------
+        ; Custom interrupt handler
+InterruptEntry:
+        push	bc
+        push	de
+        push	hl
+        push	ix
+        push	iy
+
+        call	MusicPlayer_IT
+
+        pop	iy
+        pop	ix
+        pop	hl
+        pop	de
+        pop	bc
+        
+ItVectorSave:
+        jp      0        
+
+PSG_PLAYER_TITLE:
+        db      "PSG Music Player v0.1",$0d,$0a,"(c) 2023 Laszlo Arvai", $0d, $0a
+PSG_PLAYER_TITLE_LENGTH      equ $ - PSG_PLAYER_TITLE
+
+NO_SOUND_CARD_FOUND: 
+        db      "No Sound Card Found. Exiting.", $0d,$0a
+NO_SOUND_CARD_FOUND_LENGTH equ $ - NO_SOUND_CARD_FOUND
+
+        include "psgplayer.a80"
+
+PSGFileData:
+        end
