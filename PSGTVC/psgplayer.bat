@@ -1,5 +1,5 @@
 @sjasmplus.exe -Wno-rdlow --raw=psgplayer.bin --syntax=abf main.a80
-@copy /b psgplayer.bin+DDRagon.psg psgplayer.bin
-@tvctape psgplayer.bin DDragon.cas -a 1 -o
+@copy /b psgplayer.bin + %1.psg psgplayer.bin
+@tvctape psgplayer.bin %1.cas -a 1 -o
 
 

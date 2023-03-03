@@ -1,6 +1,7 @@
         ;---------------------------------------------------------------------
-        ; TVComputer MULTICART ROM Unmount Program
+        ; TVComputer PSG Music Player
         ; (c) 2023 Laszlo Arvai
+        ; PSG file data must be appended to the end of binary of this file
         ;---------------------------------------------------------------------
         include "definitions.a80"
 
@@ -153,7 +154,7 @@ ItVectorSave:
         jp      0        
 
 PSG_PLAYER_TITLE:
-        db      "PSG Music Player v0.1",$0d,$0a,"(c) 2023 Laszlo Arvai", $0d, $0a
+        db      "PSG Music Player v0.1",$0d,$0a,"(c) 2023 Laszlo Arvai", $0d, $0a, "ESC- Stop", $0d, $0a
 PSG_PLAYER_TITLE_LENGTH      equ $ - PSG_PLAYER_TITLE
 
 NO_SOUND_CARD_FOUND: 

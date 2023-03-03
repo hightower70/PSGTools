@@ -24,28 +24,10 @@
 #define PSG_SUBSTRING_MIN_LEN         4
 #define PSG_SUBSTRING_MAX_LEN         51        // 47+4
 
-//#define PSG_CBS_DATA				0
-//#define PSG_CBS_REFERENCED	1
-//#define PSG_CBS_COMPRESSED	-1
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Types
-
-typedef enum
-{
-	PSG_CBS_DATA = 0,
-	PSG_CBS_REFERENCED = 1,
-	PSG_CBS_COMPRESSED = -1
-
-} CompressionByteStatus;
-
-typedef struct
-{
-	uint8_t Length;
-	uint16_t Offset;
-	int8_t Status;
-} CompressionByteInfo;
+#define PSG_CBS_UNUSED			0
+#define PSG_CBS_REFERENCED	1
+#define PSG_CBS_SUBSTRING		2
+#define PSG_CBS_OFFSET			3
 
 ///////////////////////////////////////////////////////////////////////////////
 // Local functions
@@ -54,198 +36,155 @@ static int filePSGSearchPattern(uint8_t* in_buffer, int in_start_index, int in_p
 
 ///////////////////////////////////////////////////////////////////////////////
 // Module global variables
-static CompressionByteInfo l_compression_info[FILE_BUFFER_LENGTH];
+static uint8_t l_compression_buffer_state[FILE_BUFFER_LENGTH];
+static uint8_t l_jump_table[CHARACTER_COUNT];
 
 ///////////////////////////////////////////////////////////////////////////////
 // Compresses the buffer
 int filePSGCompress(uint8_t* in_buffer, int in_buffer_length)
 {
-	int string_start_index;
-	int string_index;
-	uint8_t* string;
+	int current_start_index;
+	int current_index;
 	int substring_start_index;
-	int substring_index;
-	uint8_t* substring;
-	int matching_length;
-	int matching_offset;
-	int max_matching_length;
-	int max_matching_offset;
-	int matching_length_limit;
-	int expected_substring_length;
-
+	int substring_found;
 	int copy_from;
 	int copy_to;
-	int delta;
+	int copy_count;
+	int expected_substring_length;
+	int offset;
+	int current_end;
+	int pos;
 
 	// no compression for short files
 	if (in_buffer_length < PSG_SUBSTRING_MIN_LEN)
 		return in_buffer_length;
 
-	// prepare compression byte info
-	for (string_index = 0; string_index < in_buffer_length; string_index++)
-	{
-		l_compression_info[string_index].Length = 0;
-		l_compression_info[string_index].Offset = 0;
-		l_compression_info[string_index].Status = PSG_CBS_DATA;
-	}
+	// mark all byte status as unused
+	for (current_index = 0; current_index < in_buffer_length; current_index++)
+		l_compression_buffer_state[current_index] = PSG_CBS_UNUSED;
 
-	// fill out compression info, find repeated substrings
-	string_start_index = PSG_SUBSTRING_MIN_LEN;
-	while (string_start_index < in_buffer_length - PSG_SUBSTRING_MIN_LEN)
-	{
-		// find longest repeated substring before the current_start_index position
-		max_matching_length = 0;
-		for (substring_start_index = 0; substring_start_index < string_start_index - PSG_SUBSTRING_MIN_LEN; substring_start_index++)
-		{
-			matching_length_limit = string_start_index - substring_start_index;
-			if (matching_length_limit > PSG_SUBSTRING_MAX_LEN)
-				matching_length_limit = PSG_SUBSTRING_MAX_LEN;
-
-			substring = &in_buffer[substring_start_index];
-			string = &in_buffer[string_start_index];
-			matching_length = 0;
-			while (*substring++ == *string++ && matching_length < matching_length_limit)
-				matching_length++;
-
-			if (matching_length > max_matching_length)
-			{
-				max_matching_length = matching_length;
-				max_matching_offset = substring_start_index;
-			}
-		}
-
-		if (max_matching_length >= PSG_SUBSTRING_MIN_LEN)
-		{
-			while (max_matching_length > 0)
-			{
-				l_compression_info[string_start_index].Length = max_matching_length--;
-				l_compression_info[string_start_index].Offset = max_matching_offset++;
-
-				string_start_index++;
-			}
-		}
-		else
-		{
-			string_start_index++;
-		}
-	}
-
-	//determine which substrings will be used
+	// start compression with all possible substring length
 	for (expected_substring_length = PSG_SUBSTRING_MAX_LEN; expected_substring_length >= PSG_SUBSTRING_MIN_LEN; expected_substring_length--)
 	{
-		string_start_index = 0;
-		while (string_start_index < in_buffer_length)
+		printf(".");
+
+		// select string for compression
+		current_start_index = expected_substring_length;
+		while (current_start_index < in_buffer_length - expected_substring_length)
 		{
-			if (l_compression_info[string_start_index].Length == expected_substring_length)
+			// all bytes of the string must be unused
+			current_index = current_start_index;
+			current_end = current_start_index + expected_substring_length;
+			while (current_index < current_end && l_compression_buffer_state[current_index] == PSG_CBS_UNUSED)
+				current_index++;
+
+			// not all bytes are unused -> move to the next byte after the used byte and try again 
+			if (current_index != current_end)
 			{
-				// check the minimum length is really compressible
-				string_index = string_start_index;
-				substring_index = l_compression_info[string_start_index].Offset;
-				matching_length = 0;
-				while (matching_length < PSG_SUBSTRING_MIN_LEN)
+				current_start_index = current_index + 1;
+				continue;
+			}
+
+			// string is selected, build the jump table
+			filePSGPrepareJumpTable(&in_buffer[current_start_index], expected_substring_length);
+
+			// try to find the repetition string before the selected string position
+			substring_start_index = 0; // start from the first character
+			substring_found = false;
+			while (!substring_found && substring_start_index <= current_start_index - expected_substring_length)
+			{
+				pos = filePSGSearchPattern(in_buffer, substring_start_index, current_start_index, expected_substring_length);
+
+				// if found a repetition substring
+				if (pos >= 0)
 				{
-					// string must be uncompressed, unreferenced
-					if (l_compression_info[string_index].Status != PSG_CBS_DATA)
-						break;
+					// none of the element of the substring can be 'substring' or 'offset' (no recursive compression is supported)
+					current_end = pos + expected_substring_length;
+					current_index = pos;
+					while (current_index < current_end && l_compression_buffer_state[current_index] < PSG_CBS_SUBSTRING)
+						current_index++;
 
-					// substring must be uncomressed
-					if (l_compression_info[substring_index].Status < PSG_CBS_DATA)
-						break;
-
-					string_index++;
-					substring_index++;
-					matching_length++;
-				}
-
-				// if minimum length is reached -> mark for string for compressed substrnig for referenced
-				if (matching_length >= PSG_SUBSTRING_MIN_LEN)
-				{
-					string_index = string_start_index;
-					substring_index = l_compression_info[string_start_index].Offset;
-					matching_length = 0;
-					while (matching_length < expected_substring_length)
+					if (current_index != current_end)
 					{
-						// string must be uncompressed, unreferenced
-						if (l_compression_info[string_index].Status != PSG_CBS_DATA)
-							break;
-
-						// substring must be uncomressed
-						if (l_compression_info[substring_index].Status < PSG_CBS_DATA)
-							break;
-
-						l_compression_info[string_index].Status = PSG_CBS_COMPRESSED;
-						//l_compression_info[string_index].Length = 0;
-						l_compression_info[substring_index].Status = PSG_CBS_REFERENCED;
-						//l_compression_info[substring_index].Length = 0;
-
-						string_index++;
-						substring_index++;
-						matching_length++;
+						// skip unusable substring characters
+						substring_start_index = current_index + 1;
 					}
-
-					// update length of the compression
-					l_compression_info[string_start_index].Length = matching_length;
-
+					else
+					{
+						// substring found
+						substring_start_index = pos;
+						substring_found = true;
+					}
 				}
 				else
 				{
-					//l_compression_info[string_start_index].Length = 0;
+					// substring not found -> exit loop
+					break;
 				}
 			}
 
-			string_start_index++;
-		}
-	}
-
-	// remove short substring
-	for (string_index = 0; string_index < in_buffer_length; string_index++)
-	{
-		if (l_compression_info[string_index].Length < PSG_SUBSTRING_MIN_LEN)
-		{
-			l_compression_info[string_index].Length = 0;
-			l_compression_info[string_index].Offset = 0;
-		}
-	}
-
-	// compress buffer content
-	copy_from = 0;
-	copy_to = 0;
-	while (copy_from < in_buffer_length)
-	{
-		if (l_compression_info[copy_from].Length < PSG_SUBSTRING_MIN_LEN)
-		{
-			// copy content
-			in_buffer[copy_to] = in_buffer[copy_from];
-			copy_to++;
-			copy_from++;
-		}
-		else
-		{
-			// compress content
-			in_buffer[copy_to++] = l_compression_info[copy_from].Length + PSG_SUBSTRING - PSG_SUBSTRING_MIN_LEN;
-			in_buffer[copy_to++] = l_compression_info[copy_from].Offset & 0xFF;
-			in_buffer[copy_to++] = l_compression_info[copy_from].Offset >> 8;
-
-			// update offsets pointing position after the current compression point
-			delta = l_compression_info[copy_from].Length - 3;
-
-			string_index = copy_from;
-			while (string_index < in_buffer_length)
+			// if substring found -> replace oroginal string with a reference to the substring
+			if (substring_found)
 			{
-				if (l_compression_info[string_index].Length > 0 && l_compression_info[string_index].Offset > copy_to)
-					l_compression_info[string_index].Offset -= delta;
+				// mark referenced bytes (substring)
+				for (current_index = substring_start_index; current_index < substring_start_index + expected_substring_length; current_index++)
+					l_compression_buffer_state[current_index] = PSG_CBS_REFERENCED;
 
-				string_index++;
+				// create reference
+				in_buffer[current_start_index] = (expected_substring_length - PSG_SUBSTRING_MIN_LEN) + PSG_SUBSTRING;
+				in_buffer[current_start_index + 1] = (substring_start_index & 0xFF);
+				in_buffer[current_start_index + 2] = (substring_start_index >> 8);
+
+				// mark substring and offset
+				l_compression_buffer_state[current_start_index] = PSG_CBS_SUBSTRING;
+				l_compression_buffer_state[current_start_index + 1] = PSG_CBS_OFFSET;
+				l_compression_buffer_state[current_start_index + 2] = PSG_CBS_OFFSET;
+
+				// compact remaining bytes
+				copy_from = current_start_index + expected_substring_length;
+				copy_to = current_start_index + 3;
+				copy_count = in_buffer_length - copy_from;
+				while (copy_count > 0)
+				{
+					in_buffer[copy_to] = in_buffer[copy_from];
+					l_compression_buffer_state[copy_to] = l_compression_buffer_state[copy_from];
+					copy_from++;
+					copy_to++;
+					copy_count--;
+				}
+
+				// update offsets to the moved area
+				for (current_index = current_start_index + 3; current_index < in_buffer_length; current_index++)
+				{
+					if (l_compression_buffer_state[current_index] == PSG_CBS_SUBSTRING)
+					{
+						offset = in_buffer[current_index + 1] + (in_buffer[current_index + 2] << 8);
+
+						// if offset is inside the moved area
+						if (offset > current_start_index)
+						{
+							offset -= expected_substring_length - 3;
+							in_buffer[current_index + 1] = offset & 0xff;
+							in_buffer[current_index + 2] = offset >> 8;
+						}
+					}
+				}
+
+				// move to the next string in the buffer
+				in_buffer_length -= expected_substring_length - 3;
+				current_start_index += 3;
 			}
-
-			copy_from += l_compression_info[copy_from].Length;
+			else
+			{
+				// not compressible -> move to the next string
+				current_start_index++;
+			}
 		}
 	}
 
-	return copy_to;
+	return in_buffer_length;
 }
 
-#if 0
 ///////////////////////////////////////////////////////////////////////////////
 // Prepares jump table for string search
 static void filePSGPrepareJumpTable(uint8_t* in_string, uint8_t in_length)
@@ -285,4 +224,3 @@ static int filePSGSearchPattern(uint8_t* in_buffer, int in_start_index, int in_p
 
 	return -1;
 }
-#endif

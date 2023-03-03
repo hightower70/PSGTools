@@ -1,32 +1,46 @@
-;------------------------------------------------------------------------------
-; PSG simplistic approach(log of writes to SN76489 port)
-;------------------------------------------------------------------------------
-; - No header
-; - % 1cct xxxx = Latch / Data byte for SN76489 channel c, type t, data xxxx(4 bits)
-; - % 01xx xxxx = Data byte for SN76489 latched channel and type, data xxxxxx(6 bits)
-; - % 00xx xxxx = escape / control byte(values 0x00 - 0x3f), see following table #1
-;
-; Table #1
-;
-; % 0000 0000 - end of data[value 0x00](compulsory, at the end of file)
-;
-; % 0000 0001 - loop begin marker[value 0x01](optional, songs with no loop won't have this)
-;
-;	% 0000 0nnn - RESERVED for future expansions[values 0x02 - 0x07]
-;	* PLANNED: GameGear stereo - the following byte sets the stereo configuration
-;	* PLANNED : event callback - the following byte will be passed to the callback function
-;	* PLANNED : longer waits(8 - 255) - the following byte gives the additional frames
-;	* PLANNED : compression for longer substrings(52 - 255) - followed by a byte that gives the length
-;	and a word that gives the offset
-; 
-;	%0000 1xxx - COMPRESSION: repeat block of len 4 - 11 bytes
-;	%0001 xxxx - COMPRESSION: repeat block of len 12 - 27 bytes
-;	%0010 xxxx - COMPRESSION: repeat block of len 28 - 43
-;	%0011 0xxx - COMPRESSION: repeat block of len 44 - 51 [values 0x08 - 0x37]
-;	This is followed by a little - endian word which is the offset(from begin of data) of the repeating block
-;
-;	% 0011 1nnn - end of frame, wait nnn additional frames(0 - 7)[values 0x38 - 0x3f]
-;------------------------------------------------------------------------------
+        ;---------------------------------------------------------------------
+        ; TVComputer PSG music file player routine
+        ; (c) 2023 Laszlo Arvai
+        ; How to use this library:
+        ; 1. Call 'DetectSndCard'
+        ; 2. Call 'InitMusicPlayer'
+        ; 3. Initialize interrupt system and prepare to call 'MusicPlayer_IT' from the interrupt handler
+        ; 4. Load PSG file to the memory and store starting address of the memory in the 'PSGFile' variable
+        ; 5. Call 'StartMusic' routine for staring music playing
+        ; 6. Enjoy music :-)
+        ; 7. Call 'StopMusic' routine for turning off the sound
+        ; 8. Remove interrupt handler
+        ;---------------------------------------------------------------------
+
+        ;------------------------------------------------------------------------------
+        ; PSG simplistic approach(log of writes to SN76489 port)
+        ;------------------------------------------------------------------------------
+        ; - No header
+        ; - % 1cct xxxx = Latch / Data byte for SN76489 channel c, type t, data xxxx(4 bits)
+        ; - % 01xx xxxx = Data byte for SN76489 latched channel and type, data xxxxxx(6 bits)
+        ; - % 00xx xxxx = escape / control byte(values 0x00 - 0x3f), see following table #1
+        ;
+        ; Table #1
+        ;
+        ; % 0000 0000 - end of data[value 0x00](compulsory, at the end of file)
+        ;
+        ; % 0000 0001 - loop begin marker[value 0x01](optional, songs with no loop won't have this)
+        ;
+        ;	% 0000 0nnn - RESERVED for future expansions[values 0x02 - 0x07]
+        ;	* PLANNED: GameGear stereo - the following byte sets the stereo configuration
+        ;	* PLANNED : event callback - the following byte will be passed to the callback function
+        ;	* PLANNED : longer waits(8 - 255) - the following byte gives the additional frames
+        ;	* PLANNED : compression for longer substrings(52 - 255) - followed by a byte that gives the length
+        ;	and a word that gives the offset
+        ; 
+        ;	%0000 1xxx - COMPRESSION: repeat block of len 4 - 11 bytes
+        ;	%0001 xxxx - COMPRESSION: repeat block of len 12 - 27 bytes
+        ;	%0010 xxxx - COMPRESSION: repeat block of len 28 - 43
+        ;	%0011 0xxx - COMPRESSION: repeat block of len 44 - 51 [values 0x08 - 0x37]
+        ;	This is followed by a little - endian word which is the offset(from begin of data) of the repeating block
+        ;
+        ;	% 0011 1nnn - end of frame, wait nnn additional frames(0 - 7)[values 0x38 - 0x3f]
+        ;------------------------------------------------------------------------------
 
         ; Sound card defines
 SndCardNone             equ     0       ; No sound card detected
@@ -41,11 +55,18 @@ SndChannelCount         equ     4       ; Number of channels on SN chip
         ; PSG command defines
 PSGLatch                equ     $80
 PSGData                 equ     $40
+PSGNoiseRegister        equ     $e0
+PSGChannelMask          equ     %01100000
 
 PSGWait                 equ     $38
 PSGSubString            equ     $08
 PSGLoop                 equ     $01
 PSGEnd                  equ     $00
+
+        ; SN76489 register address
+FreqWriteChannel0       equ     $80
+FreqWriteChannel1       equ     $a0
+FreqWriteChannel2       equ     $c0
 
         ; Sound card variables
 SndCardBaseAddr		db	0       ; Sound card base address
@@ -64,14 +85,29 @@ PSGMusicPointer         dw    0                 ; the pointer to the current
 PSGMusicLoopPoint       dw    0                 ; the pointer to the loop begin
 PSGMusicSkipFrames      db    0                 ; the frames we need to skip
 
-
         ; decompression vars
 PSGMusicSubstringLen            db      0       ; lenght of the substring we are playing
 PSGMusicSubstringRetAddr        dw      0       ; return to this address when substring is over
 
+        ; frequency calculation for 3.125MHz clock (The values can be calculated by x*32*3.125MHz/3.579MHz where x=[0..31])
+FreqMultiplierTable:
+        dw        0,  28,  56,  84, 112, 140, 168, 196
+        dw      224, 251, 279, 307, 335, 363, 391, 419
+        dw      447, 475, 503, 531, 559, 587, 615, 643
+        dw      671, 699, 726, 754, 782, 810, 838, 866
 
- ;---------------------------------------------------------------------
+FreqRegister0   dw      0                       ; channel 0 frequency register mirror
+FreqRegister1   dw      0                       ; channel 1 frequency register mirror
+FreqRegister2   dw      0                       ; channel 2 frequency register mirror
+FreqRegisterChanged    db      0                ; flag for updated frequency registers (bit 0 - channel 0 updated, bit1 - channel 1 updated, bit 2 - channel 2 updated)
+
+ChannelFreqCommand      db      0               ; latch command for writeing
+LastLatchCommand        db      0               ; last issued latch command
+
+        ;---------------------------------------------------------------------
         ; Detect sound card type
+        ; Determines the installed sound card (SoundMagic or Game Card) and
+        ; stores the type of the at the SndCardType variable (1, SndCardGame - Game Card; 2,SndCardSndMx - Sound Magic; 0,SndCardNone - No sound card instelled)
 DetectSndCard:		
         ld	hl, SndCardType                 ; Init detected card type
         ld	(hl), SndCardNone
@@ -119,8 +155,8 @@ SndInitChip:
         ld	b, SndChannelCount
         ld	a, 128+16+15
 
-SndInitChipLoop:		
-        out	(c),a
+SndInitChipLoop:		                ; Mute all channels
+        out	(c), a
         
         nop
         nop
@@ -128,7 +164,7 @@ SndInitChipLoop:
         nop
         nop
         nop
-        add	a,32
+        add	a, 32
         djnz	SndInitChipLoop
         
         ret
@@ -159,7 +195,7 @@ DetectSndCardStringInnerCmp:
         inc	hl
         djnz	DetectSndCardStringInnerCmp
 
-DetectSndCardStringFound
+DetectSndCardStringFound                        ; Calculate sound card base address
         ld	a, c
         
         add	a, a
@@ -184,11 +220,19 @@ DetectSndCardStringNotFound:
         ld	(SndCardDetectAddr), hl
         jr	DetectSndCardStringInnerLoop
 
+        ;---------------------------------------------------------------------
+        ; initializes music player routine.
 InitMusicPlayer:
         xor a                                   ; ld a,PSG_STOPPED
         ld (PSGMusicStatus),a                   ; set music status to PSG_STOPPED
+
         ret
 
+        ;---------------------------------------------------------------------
+        ; Starts music playing
+        ; The PSGFile variable must point to the begining of the PSG file in the memory
+        ; The sound card detection must be called before and 50Hz frame interrupt 
+        ; must call the MusicPlayer_IT routine
 StartMusic:
         ld      a, (SndCardType)
         cp      a, SndCardNone
@@ -219,6 +263,10 @@ StopMusic:
         
         ret
 
+        ;---------------------------------------------------------------------
+        ; Interrupt handler routine
+        ; Must be called from the frame (50Hz) interrupt of the TVC for the proper timing
+        ; All used registers are saved
 MusicPlayer_IT:
         ld      a, (PSGMusicStatus)             ; check if we have got to play a tune
         or      a
@@ -228,11 +276,15 @@ MusicPlayer_IT:
         or      a
         jp      nz, LPSGSkipFrame
   
-        ld      hl, (PSGMusicPointer)           ; read current address
+        xor     a
+        ld      (FreqRegisterChanged), a        ; reset freq changed status
 
 LPSGFrameLoop:
+        ld      hl, (PSGMusicPointer)           ; read current address
         ld      b, (hl)                         ; load PSG byte (in B)
         inc     hl                              ; point to next byte
+        ld      (PSGMusicPointer), hl           ; store pointer
+
         ld      a, (PSGMusicSubstringLen)       ; read substring len
         or      a
         jr      z, LPSGProcessCommand           ; check if it is 0 (we are not in a substring)
@@ -240,15 +292,126 @@ LPSGFrameLoop:
         ld      (PSGMusicSubstringLen), a       ; save len
         jr      nz, LPSGProcessCommand
         ld      hl, (PSGMusicSubstringRetAddr)  ; substring is over, retrieve return address
+        ld      (PSGMusicPointer), hl           ; store pointer
 
 LPSGProcessCommand:
         ld      a, b                            ; copy PSG byte into A
         cp      a, PSGLatch                     ; is it a latch?
         jr      nc, LPSGSendToChip              ; if >= $80 then it is a latch
         cp      a, PSGData                      ; check if it is a data
-        jr      c, LPSGCommand                   ; if < $40 then it is a command
+        jp      c, LPSGCommand                   ; if < $40 then it is a command
         
 LPSGSendToChip:
+        ld      a, (SndCardType)                ; check sound card type
+        cp      a, SndCardGame
+        jr      nz, NoFreqChange
+
+        ; frequency recalculation is required
+        ld      a, b                            ; get PSG byte
+        cp      a, PSGLatch                     ; is it a latch command
+        jr      nc, FreqChangeProcessLatchCommand
+
+        ; process data command with freq change
+        ld      a, (LastLatchCommand)
+        cp      PSGNoiseRegister
+        jr      nc, NoFreqChange                ; noise register command sent directly to the chip
+
+        bit     4, a                            ; check for tone register
+        jr      nz, NoFreqChange                ; amplitide register is sent directly
+
+        and     a, PSGChannelMask               ; determine channel
+
+        cp      a, $00                          ; channel 0
+        jr      nz, FreqChangeChannel1High
+
+        ld      hl, FreqRegister0               ; update channel 0 register
+        ld      c, $01
+
+        ; stores new frequency register value (upper 6 bits)
+        ; the new value will be sent to the chip when all PSG data of this frame is processed
+UpdateFrequencyRegisterHigh:
+        ex      hl, de
+        ld      a, b
+        and     $3f                             ; keep only the lowest 6 bits
+        ld      l, a                            ; shift left by 4 bits
+        ld      h, 0
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+
+        ex      hl, de                          ; insert into the frequency register mirror pointed by HL
+        ld      a, (hl)
+        and     a, $0f
+        or      a, e
+        ld      (hl), a
+        inc     hl
+        ld      (hl), d
+        
+        jp      LPSGFrameLoop
+
+FreqChangeChannel1High:
+        cp      a, $20                          ; channel 
+        jr      nz, FreqChangeChannel2High
+         
+        ld      hl, FreqRegister1               ; store channel 1 high 6 bits of frequency
+        ld      c, $02
+
+        jr       UpdateFrequencyRegisterHigh
+
+FreqChangeChannel2High
+        ld      hl, FreqRegister2               ; store channel 2 high 6 bits of frequency
+        ld      c, $04                  
+
+        jr       UpdateFrequencyRegisterHigh
+
+        ; process latch command with freq change
+FreqChangeProcessLatchCommand:
+        ld      (LastLatchCommand), a           ; store last latch command
+        cp      PSGNoiseRegister
+        jr      nc, NoFreqChange                ; noise register command sent directly to the chip
+
+        bit     4, a                            ; check for tone register
+        jr      nz, NoFreqChange                ; amplitide register is sent directly
+
+        and     a, PSGChannelMask               ; determine channeé
+        cp      a, $00                          ; channel 0
+        jr      nz, FreqChangeChannel1Low
+
+        ; process channel 0
+        ld      hl, FreqRegister0
+        ld      c, $01
+
+UpdateFrequencyRegisterLow:
+        ld      a, (FreqRegisterChanged)        ; Flag register changed
+        or      a, c
+        ld      (FreqRegisterChanged), a
+
+        ld      a, (hl)                         ; change lowest four bits
+        and     a, $f0
+        ld      c, a
+        ld      a, b
+        and     a, $0f
+        or      a, c
+        ld      (hl), a
+
+        jp      LPSGFrameLoop
+
+FreqChangeChannel1Low:
+        cp      a, $20                          ; channel 
+        jr      nz, FreqChangeChannel2Low
+
+        ; process channel 1
+        ld      hl, FreqRegister1               ; change channel 1 lowest four bits
+        ld      c, $02
+        jr      UpdateFrequencyRegisterLow
+
+FreqChangeChannel2Low:        
+        ld      hl, FreqRegister2               ; change channel 2 lowest four bits
+        ld      c, $04
+        jr      UpdateFrequencyRegisterLow
+
+NoFreqChange:
         ld	a, (SndCardBaseAddr)            ; load port address
         ld	c, a                             
 
@@ -256,7 +419,7 @@ LPSGSendToChip:
 
         jp      LPSGFrameLoop
   
-LPSGSkipFrame:
+LPSGSkipFrame:                                  ; skip frame (decrement frame skip pointer)
         dec     a
         ld      (PSGMusicSkipFrames), a
         ret
@@ -269,9 +432,44 @@ LPSGCommand:
         ld      (PSGMusicSkipFrames), a ; we got additional frames
 
 LPSGFrameDone:
-        ld      (PSGMusicPointer), hl   ; save current address
-        ret                             ; frame done
+        ld      a, (SndCardType)
+        cp      a, SndCardGame        
+        ret     nz                      ; frame done for other cards than GameCard
 
+        ; in the case of game card recalculate and write out frequency registers
+        ld      a, (FreqRegisterChanged)
+        and     $01                             ; check channel 0
+        jr      z, CheckFreqCannel1
+
+        ; update channel 0 freq
+        ld      a, FreqWriteChannel0
+        ld      (ChannelFreqCommand), a
+        ld      hl, (FreqRegister0)
+        call    RecalculateAndUpdateFrequency
+
+CheckFreqCannel1:
+        ld      a, (FreqRegisterChanged)
+        and     $02                             ; check channel 1
+        jr      z, CheckFreqCannel2
+
+        ; update channel 1 freq
+        ld      a, FreqWriteChannel1
+        ld      (ChannelFreqCommand), a
+        ld      hl, (FreqRegister1)
+        call    RecalculateAndUpdateFrequency
+
+CheckFreqCannel2:
+        ld      a, (FreqRegisterChanged)
+        and     $04                             ; check channel 2
+        ret     z
+
+        ; update channel 2 freq
+        ld      a, FreqWriteChannel2
+        ld      (ChannelFreqCommand), a
+        ld      hl, (FreqRegister2)
+        jp      RecalculateAndUpdateFrequency   ; return
+
+        ; process other PSG commands
 LPSGOtherCommands:
         cp      a, PSGSubString
         jr      nc, LPSGSubString
@@ -287,10 +485,13 @@ LPSGOtherCommands:
 
         ret
 
+        ; PSG set loop point command
 LPSGSetLoopPoint:
+        ld      hl, (PSGMusicPointer)
         ld      (PSGMusicLoopPoint), hl
         jp      LPSGFrameLoop
 
+        ; PSG substring (compressed data) command
 LPSGSubString:
         sub     a, PSGSubString-4               ; len is value - $08 + 4
         ld      (PSGMusicSubstringLen), a       ; save len
@@ -300,9 +501,90 @@ LPSGSubString:
         inc     hl
         ld      (PSGMusicSubstringRetAddr), hl  ; save return address
         ld      hl, (PSGMusicStart)
-        add     hl, bc                           ; make substring current
+        add     hl, bc                          ; make substring position to the current pointer
+        ld      (PSGMusicPointer), hl           ; store pointer
         jp      LPSGFrameLoop
 
 LPSGMusicLoop:
-        ld      hl, (PSGMusicLoopPoint)
+        ld      hl, (PSGMusicLoopPoint)         ; load loop pointer
+        ld      (PSGMusicPointer), hl           ; store pointer        
         jp      LPSGFrameLoop
+
+        ; calculates frequency register value based on the chip clock frequency (3.125MHz) vs. PSG file frequency (3.579MHz)
+RecalculateAndUpdateFrequency:
+        ld      b, l                            ; save lowest bits
+
+        ; get higest five bit (shift rigth HL by five bits then use high eight bits)
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+
+        ld      a, h                            ; A = highest 5 bits
+        and     a, $1f                          ; remove other bits
+        add     a, a                            ; multiply by two for table lookup
+
+        ld      hl, FreqMultiplierTable         ; HL = table address + 2 * highest 5 bits
+        ld      e, a
+        ld      d, 0
+        add     hl, de
+
+        ld      e, (hl)                         ; DE = freq value of the higest 5 bits
+        inc     hl
+        ld      d, (hl)
+
+        ld      a, b                            ; freq ergister lowest 5 bits
+        and     a, $1f
+        add     a, a
+        
+        ld      hl, FreqMultiplierTable         ; HL = table address + 2 * highest 5 bits
+        ld      c, a
+        ld      b, 0
+        add     hl, bc
+
+        ld      a, (hl)
+        inc     hl
+        ld      h, (hl)
+        ld      l, a
+        
+        ; shift hl to right by five bits (left by three and use highest eight bits)
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        ld      l, h
+        ld      h, 0
+
+        add     hl, de                          ; HL = multipled frequency
+
+        ; load channel command
+        ld      a, (ChannelFreqCommand)
+        ld      b, a
+
+        ; load port
+        ld      a, (SndCardBaseAddr)
+        ld      c, a
+         
+        ; send lowest 4 bits of frequency
+        ld      a, l
+        and     a, 0x0f
+        or      b
+        out     (c), a
+
+        ; send higest 6 bits
+        add     hl, hl                          ; shift left by four bits
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        ld      a, h                            ; use only highest eight bits
+        and     a, $3f
+        out     (c), a
+        
+        ret
+
+        
+        
+        
+
+        
+         
+        
+
