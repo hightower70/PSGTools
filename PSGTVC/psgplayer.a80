@@ -89,12 +89,16 @@ PSGMusicSkipFrames      db    0                 ; the frames we need to skip
 PSGMusicSubstringLen            db      0       ; lenght of the substring we are playing
 PSGMusicSubstringRetAddr        dw      0       ; return to this address when substring is over
 
+        ifndef      FAST_FREQ_CALCULATION
+
         ; frequency calculation for 3.125MHz clock (The values can be calculated by x*32*3.125MHz/3.579MHz where x=[0..31])
 FreqMultiplierTable:
         dw        0,  28,  56,  84, 112, 140, 168, 196
         dw      224, 251, 279, 307, 335, 363, 391, 419
         dw      447, 475, 503, 531, 559, 587, 615, 643
         dw      671, 699, 726, 754, 782, 810, 838, 866
+        
+        endif
 
 FreqRegister0   dw      0                       ; channel 0 frequency register mirror
 FreqRegister1   dw      0                       ; channel 1 frequency register mirror
@@ -107,7 +111,7 @@ LastLatchCommand        db      0               ; last issued latch command
         ;---------------------------------------------------------------------
         ; Detect sound card type
         ; Determines the installed sound card (SoundMagic or Game Card) and
-        ; stores the type of the at the SndCardType variable (1, SndCardGame - Game Card; 2,SndCardSndMx - Sound Magic; 0,SndCardNone - No sound card instelled)
+        ; stores the type of the at the SndCardType variable (1, SndCardGame - Game Card; 2,SndCardSndMx - Sound Magic; 0,SndCardNone - No sound card installed)
 DetectSndCard:		
         ld	hl, SndCardType                 ; Init detected card type
         ld	(hl), SndCardNone
@@ -510,8 +514,47 @@ LPSGMusicLoop:
         ld      (PSGMusicPointer), hl           ; store pointer        
         jp      LPSGFrameLoop
 
-        ; calculates frequency register value based on the chip clock frequency (3.125MHz) vs. PSG file frequency (3.579MHz)
 RecalculateAndUpdateFrequency:
+        ifdef      FAST_FREQ_CALCULATION
+
+        ; calculates frequency register value based on approximation (multiplide by 7/8 which is approx. 3.125MHz/3.579MHz)
+        ld      c, l                            ; save register value to BC
+        ld      b, h
+        
+        add     hl, hl                          ; multiple freq register value by 8
+        add     hl, hl
+        add     hl, hl
+        
+        sbc     hl, bc                          ; substract once the orogianl value (HL=freq register * 7)
+        
+        add     hl, hl                          ; shift right by one bit so the highest six bits will be in the H register
+
+        srl     l                               ; get freq register lowset four bits
+        srl     l                               ; (move upper four bits to lowest four bits)
+        srl     l
+        srl     l
+
+        ; load port address
+        ld      a, (SndCardBaseAddr)
+        ld      c, a
+
+        ; prepare ands send command
+        ld      a, (ChannelFreqCommand)
+        or      a, l
+        out     (c), a
+
+        ; send high bits
+        ld      a, (SndCardBaseAddr)            ; just for timing (32 Tcycle must be between the two 'out' intstruction)
+        ld      c, a
+        ld      a, h                            ; get highest five bits
+        and     a, $3f
+        nop                                     ; timing only
+        out     (c), a
+         
+
+        else
+
+        ; calculates frequency register value based on the chip clock frequency (3.125MHz) vs. PSG file frequency (3.579MHz)
         ld      b, l                            ; save lowest bits
 
         ; get higest five bit (shift rigth HL by five bits then use high eight bits)
@@ -578,6 +621,8 @@ RecalculateAndUpdateFrequency:
         and     a, $3f
         out     (c), a
         
+        endif
+
         ret
 
         

@@ -20,15 +20,16 @@
 ///////////////////////////////////////////////////////////////////////////////
 // Module global variables
 static FILE* l_output_file;
-static bool l_text_mode = false;
 static int l_file_length;
+bool l_asm_mode = false;
+
 
 //////////////////////////////////////////////////////////////////////////////
 // Creates output file in binary ot text mode
 bool fileOutputCreate(char* in_filename, bool in_text_mode)
 {
 	// init
-	l_text_mode = in_text_mode;
+	l_asm_mode = in_text_mode;
 	l_file_length = 0;
 
 	// create file
@@ -50,7 +51,7 @@ void fileOutputWriteBlock(uint8_t* in_data, int in_data_length)
 {
 	int pos;
 
-	if (l_text_mode)
+	if (l_asm_mode)
 	{
 		for (pos = 0; pos < in_data_length; pos++)
 		{
@@ -61,7 +62,7 @@ void fileOutputWriteBlock(uint8_t* in_data, int in_data_length)
 				{
 					fprintf(l_output_file, "\n");
 				}
-				fprintf(l_output_file, "    .db ");
+				fprintf(l_output_file, "        .db ");
 			}
 			else
 			{
@@ -69,6 +70,7 @@ void fileOutputWriteBlock(uint8_t* in_data, int in_data_length)
 			}
 
 			fprintf(l_output_file, "0%02Xh", in_data[pos]);
+			l_file_length++;
 		}
 	}
 	else

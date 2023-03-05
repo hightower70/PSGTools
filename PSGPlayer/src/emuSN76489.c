@@ -159,8 +159,8 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 	uint8_t noise_register_shift_count = 0;
 	uint8_t i;
 
-	while( in_sample_count > 0)
-  {
+	while (in_sample_count > 0)
+	{
 		// update ClockCounter
 		in_state->ClockCounter += in_state->ClockFrequency / CLOCK_DIVISOR;
 		clock_cycles = (uint16_t)(in_state->ClockCounter / g_sample_rate);
@@ -169,13 +169,13 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 		// handle channels 0,1,2
 		for (i = 0; i < 3; i++)
 		{
-			if(in_state->Frequency[i] == 0)
+			if (in_state->Frequency[i] == 0 || in_state->Frequency[i] == 1)
 			{
 				in_state->Output[i] = 1;
 			}
 			else
 			{
-				if(in_state->Counter[i] < clock_cycles)
+				if (in_state->Counter[i] < clock_cycles)
 				{
 					// run clock_cycle number of sound generarion cycle
 					clock = clock_cycles;
@@ -185,7 +185,7 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 						in_state->Output[i] = -in_state->Output[i];
 
 						// output for noise register
-						if(i==3)
+						if (i == 3)
 							noise_register_shift_count++;
 
 						// update counter
@@ -204,46 +204,42 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 			sample[i] = in_state->Output[i] * in_state->Amplitude[i];
 		}
 
-		// handle noise divisor (counter)
-		//if((in_state->NoiseControl & 3) != 3)
+		noise_register_shift_count = 0;
+
+		if (in_state->NoiseCounter < clock_cycles)
 		{
-			noise_register_shift_count = 0;
-
-			if(in_state->NoiseCounter < clock_cycles)
+			switch (in_state->NoiseControl & 3)
 			{
-				switch (in_state->NoiseControl & 3)
-				{
-					case 0:
-						noise_divisor = 2 * CLOCK_DIVISOR * 16;
-						break;
+				case 0:
+					noise_divisor = 2 * CLOCK_DIVISOR * 16;
+					break;
 
-					case 1:
-						noise_divisor = 4 * CLOCK_DIVISOR * 16;
-						break;
+				case 1:
+					noise_divisor = 4 * CLOCK_DIVISOR * 16;
+					break;
 
-					case 2:
-						noise_divisor = 8 * CLOCK_DIVISOR * 16;
-						break;
+				case 2:
+					noise_divisor = 8 * CLOCK_DIVISOR * 16;
+					break;
 
-					case 3:
-						noise_divisor = in_state->Frequency[2] * CLOCK_DIVISOR * 2;
-						break;
-				}
-
-				in_state->NoiseCounter = noise_divisor / CLOCK_DIVISOR + in_state->NoiseCounter - clock_cycles;
-				noise_register_shift_count = 1;
+				case 3:
+					noise_divisor = in_state->Frequency[2] * CLOCK_DIVISOR * 2;
+					break;
 			}
-			else
-			{
-				in_state->NoiseCounter -= clock_cycles;
-			}
+
+			in_state->NoiseCounter = noise_divisor / CLOCK_DIVISOR + in_state->NoiseCounter - clock_cycles;
+			noise_register_shift_count = 1;
+		}
+		else
+		{
+			in_state->NoiseCounter -= clock_cycles;
 		}
 
 		// handle noise register
-		while(noise_register_shift_count > 0)
+		while (noise_register_shift_count > 0)
 		{
 			// update shift register
-			in_state->NoiseShiftRegister = (in_state->NoiseShiftRegister>>1) |
+			in_state->NoiseShiftRegister = (in_state->NoiseShiftRegister >> 1) |
 				((((in_state->NoiseControl & 4) != 0) ? CalculateParity(in_state->NoiseShiftRegister & in_state->NoiseTap) : in_state->NoiseShiftRegister & 1) << 15);
 
 			noise_register_shift_count--;
@@ -256,16 +252,16 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 		sample[3] = in_state->NoiseOutput * in_state->Amplitude[3];
 
 		// generate sample output
-		if(g_stereo_mode)
+		if (g_stereo_mode)
 		{
 			// stereo output
 
 			// left channel
 			sample_sum = 0;
-			for(i=0; i<4; i++)
+			for (i = 0; i < 4; i++)
 			{
 				sample_weight = 127 - in_state->Paning[i];
-				if(sample_weight > 254)
+				if (sample_weight > 254)
 					sample_weight = 254;
 
 				sample_sum += (int16_t)((int32_t)sample[i] * sample_weight / 254);
@@ -275,10 +271,10 @@ void emuSN76489RenderAudioStream(emuSN76489State* in_state, int16_t* out_stream,
 
 			// right channel
 			sample_sum = 0;
-			for(i=0; i<4; i++)
+			for (i = 0; i < 4; i++)
 			{
 				sample_weight = in_state->Paning[i] + 127;
-				if(sample_weight < 0)
+				if (sample_weight < 0)
 					sample_weight = 0;
 
 				sample_sum += (int16_t)((int32_t)sample[i] * sample_weight / 254);

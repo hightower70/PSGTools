@@ -11,6 +11,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 // Includes
 #include <emuSN76489.h>
+#include <Main.h>
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -142,10 +143,11 @@ void emuN76496WriteRegister(emuSN76489State* in_state, uint8_t in_data)
 		case SN76489REG_CH0_TONE:
 		case SN76489REG_CH1_TONE:
 		case SN76489REG_CH2_TONE:
-			//save oroginal register content
+			//save original register content
 			in_state->ToneRegisters[register_index] = register_value;
 
 			// calculate new frequency value
+			register_value = (uint16_t)(((register_value * (int64_t)l_target_clock_frequency + (g_SN76489_state.ClockFrequency / 2)) / g_SN76489_state.ClockFrequency));
 
 			// store register value
 			in_state->Registers[register_index] = register_value;

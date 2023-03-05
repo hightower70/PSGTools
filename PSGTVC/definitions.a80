@@ -4,6 +4,8 @@
         ; (c) 2023 Laszlo Arvai
         ;---------------------------------------------------------------------
 
+FAST_FREQ_CALCULATION   equ 1
+
 ; Memory start address for the program
 PROGRAM_START_ADDRESS   equ 6639
 

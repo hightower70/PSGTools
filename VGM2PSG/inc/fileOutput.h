@@ -11,9 +11,13 @@
 #ifndef __fileOutput_h
 #define __fileOutput_h
 
+///////////////////////////////////////////////////////////////////////////////
+// Include files
 #include <stdint.h>
 #include <stdbool.h>
 
+///////////////////////////////////////////////////////////////////////////////
+// Function prototypes
 bool fileOutputCreate(char* in_filename, bool in_text_mode);
 void fileOutputWriteBlock(uint8_t* in_data, int in_data_length);
 void fileOutputClose(void);

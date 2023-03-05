@@ -23,12 +23,13 @@ emuSN76489State g_SN76489_state;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Module global variables
-static int l_psg_frame_step = 44100 / 50;
+static int l_psg_frame_step = 44100 / 50;  // default frame rate is 50Hz
 static uint8_t l_psg_buffer[FILE_BUFFER_LENGTH];
 static uint8_t l_psg_compressed_buffer[FILE_BUFFER_LENGTH];
 static bool l_insert_length = false;
 static bool l_psg_compression = true;
 static uint8_t l_vgm_buffer[FILE_BUFFER_LENGTH];
+static bool l_asm_output = false;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Main function
@@ -79,14 +80,22 @@ int main(int argc, char* argv[])
 						}
 						else
 						{
-							if (_strcmpi(argv[i], "-?") == 0)
+							if (_strcmpi(argv[i], "-asm") == 0)
 							{
-								PrintUsage();
+								l_asm_output = true;
 							}
 							else
 							{
-								printf("ERROR: Invalid command line parameter: %s\n", argv[i]);
-								return -1;
+								if (_strcmpi(argv[i], "-?") == 0)
+								{
+									PrintUsage();
+									return 0;
+								}
+								else
+								{
+									printf("ERROR: Invalid command line parameter: %s\n", argv[i]);
+									return -1;
+								}
 							}
 						}
 					}
@@ -114,6 +123,14 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	// check filenames
+	if (vgm_filename == NULL || psg_filename== NULL)
+	{
+		PrintUsage();
+		return 0;
+	}
+
+	// load VGM file
 	printf("Opening: %s\n", vgm_filename);
 
 	int vgm_file_length = fileVGMLoad(vgm_filename, l_vgm_buffer, FILE_BUFFER_LENGTH);
@@ -142,6 +159,7 @@ int main(int argc, char* argv[])
 	
 	filePSGStart(l_psg_buffer, FILE_BUFFER_LENGTH);
 
+	// 'play' VGM file and log SN76489 register writes
 	emuSN76489Reset(&g_SN76489_state);
 	fileVGMPlayerStart();
 	while(fileVGMPlayerIsBusy())
@@ -156,6 +174,7 @@ int main(int argc, char* argv[])
 
 	output_length = filePSGGetLength();
 
+	// compress PSG file
 	if (l_psg_compression)
 	{
 		printf("Compressing");
@@ -166,7 +185,7 @@ int main(int argc, char* argv[])
 	printf("Creating: %s\n", psg_filename);
 
 	// write output file
-	if (!fileOutputCreate(psg_filename, false))
+	if (!fileOutputCreate(psg_filename, l_asm_output))
 	{
 		printf("Can't create output file: %s", argv[2]);
 		return -1;
@@ -222,9 +241,10 @@ static void PrintUsage(void)
 	printf("Usage:\n");
 	printf("VGM2PSG musicfile.vgm musicfile.psg [options]\n");
 	printf("Options:\n");
+	printf("  -asm           - sets output file format to Z80 ASM file. If not specified, binary output will be produced.\n");
 	printf("  -clock n       - sets SN76489 clock frequency to n Hz. The default is 3579545Hz\n");
 	printf("  -framerate n   - sets the playback framerate to n Hz. The default is 50Hz\n");
 	printf("  -insertlength  - inserts PSG file length into the begining of the output file\n");
-	printf("  -noncompressed - creates PSG file without comressed elements");
+	printf("  -noncompressed - creates PSG file without comressed elements\n");
 	printf("  -?             - prints this help text\n");
 }

@@ -1,0 +1,304 @@
+;------------------------------------------------------------------------------
+; PSG simplistic approach(log of writes to SN76489 port)
+;------------------------------------------------------------------------------
+; - No header
+; - % 1cct xxxx = Latch / Data byte for SN76489 channel c, type t, data xxxx(4 bits)
+; - % 01xx xxxx = Data byte for SN76489 latched channel and type, data xxxxxx(6 bits)
+; - % 00xx xxxx = escape / control byte(values 0x00 - 0x3f), see following table #1
+;
+; Table #1
+;
+; % 0000 0000 - end of data[value 0x00](compulsory, at the end of file)
+;
+; % 0000 0001 - loop begin marker[value 0x01](optional, songs with no loop won't have this)
+;
+;	% 0000 0nnn - RESERVED for future expansions[values 0x02 - 0x07]
+;	* PLANNED: GameGear stereo - the following byte sets the stereo configuration
+;	* PLANNED : event callback - the following byte will be passed to the callback function
+;	* PLANNED : longer waits(8 - 255) - the following byte gives the additional frames
+;	* PLANNED : compression for longer substrings(52 - 255) - followed by a byte that gives the length
+;	and a word that gives the offset
+; 
+;	%0000 1xxx - COMPRESSION: repeat block of len 4 - 11 bytes
+;	%0001 xxxx - COMPRESSION: repeat block of len 12 - 27 bytes
+;	%0010 xxxx - COMPRESSION: repeat block of len 28 - 43
+;	%0011 0xxx - COMPRESSION: repeat block of len 44 - 51 [values 0x08 - 0x37]
+;	This is followed by a little - endian word which is the offset(from begin of data) of the repeating block
+;
+;	% 0011 1nnn - end of frame, wait nnn additional frames(0 - 7)[values 0x38 - 0x3f]
+;------------------------------------------------------------------------------
+
+
+SndCardNone             equ     0       ; No sound card detected
+SndCardGame             equ     1       ; Game card
+SndCardSndMx            equ     2       ; Sound Magix card
+
+GameCardControlPort     equ     $0f     ; Control port address on game card
+GameCardClockEnable     equ     8+7     ; Clock enable signal on game card
+GameCardClockDisable    equ     7       ; Clock disable signal on game card
+SndChannelCount         equ     4       ; Number of channels on SN chip
+
+SndCardBaseAddr		db	0       ; Sound card base address
+SndCardType		db	0       ; Type if the sound card
+                        
+DetectGameStr		db	6,'JOY+SN'
+DetectMultiStr		db	5,'SndMx'
+
+SndCardDetectAddr	dw	0
+
+PSGLatch                equ     $80
+PSGData                 equ     $40
+
+PSGWait                 equ     $38
+PSGSubString            equ     $08
+PSGLoop                 equ     $01
+PSGEnd                  equ     $00
+
+PSGMusicStatus          db    0                 ; are we playing a background music?
+PSGMusicStart           dw    0                 ; the pointer to the beginning of music
+PSGMusicPointer         dw    0                 ; the pointer to the current
+PSGMusicLoopPoint       dw    0                 ; the pointer to the loop begin
+PSGMusicSkipFrames      db    0                 ; the frames we need to skip
+
+
+        ; decompression vars
+PSGMusicSubstringLen            db      0       ; lenght of the substring we are playing
+PSGMusicSubstringRetAddr        dw      0       ; return to this address when substring is over
+
+
+ ;---------------------------------------------------------------------
+        ; Detect sound card type
+DetectSndCard:		
+        ld	hl, SndCardType                 ; Init detected card type
+        ld	(hl), SndCardNone
+        
+        ld	de, DetectGameStr               ; Detect game card
+        call	DetectSndCardString
+        
+        ld	a, (SndCardBaseAddr)            ; if detection is not success -> detect Multi Sound
+        or	a
+        jr	z, DetectMultiSound
+        
+        ld      a, SndCardGame                  ; Detection success -> store card type
+        ld	(SndCardType), a
+
+        ld	a, (SndCardBaseAddr)            ; enable sound chip clock on game card
+        add     a, GameCardControlPort
+        ld      c, a
+        ld      a, GameCardClockEnable
+        out     (c), a
+
+        call    SndInitChip
+         
+        ret
+
+DetectMultiSound	
+        ld	de, DetectMultiStr              ; Multi Sound string
+        call	DetectSndCardString             ; detect
+        
+        ld	a, (SndCardBaseAddr)            ; return if no card found
+        or	a
+        ret	z
+        
+        ld      a, SndCardSndMx                 ; Detection success -> store card type
+        ld	(SndCardType), a
+
+        call    SndInitChip
+
+        ret
+
+        ;---------------------------------------------------------------------
+        ; Initialize sound chip
+SndInitChip:
+        ld	a, (SndCardBaseAddr)            ; Init card
+        ld	c, a                             
+        ld	b, SndChannelCount
+        ld	a, 128+16+15
+
+SndInitChipLoop:		
+        out	(c),a
+        
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        add	a,32
+        djnz	SndInitChipLoop
+        
+        ret
+
+        ;---------------------------------------------------------------------
+        ; Detect sound card type string
+        ; Input:  DE - Detection string pointer
+DetectSndCardString:
+        ld      a, (de)                         ; load name length
+        inc     a
+        ld      b, a
+
+        xor	a
+        ld	(SndCardBaseAddr), a
+        
+        ld	hl, $40
+        ld	(SndCardDetectAddr),hl
+        
+        ld	c, 1			        ; 'C' is the slot number
+DetectSndCardStringInnerLoop:
+        ld	hl, (SndCardDetectAddr)
+        
+DetectSndCardStringInnerCmp:
+        ld	a, (de)
+        cp	(hl)
+        jr	nz, DetectSndCardStringNotFound
+        inc	de
+        inc	hl
+        djnz	DetectSndCardStringInnerCmp
+
+DetectSndCardStringFound
+        ld	a, c
+        
+        add	a, a
+        add	a, a
+        add	a, a
+        add	a, a
+        
+        ld	(SndCardBaseAddr), a
+        ret
+
+DetectSndCardStringNotFound:
+        inc	c			        ; Increment slot number
+        ld	a, c
+        cp	5
+        ret	z			        ; If slot number is 5 -> card not found
+        
+        push	bc
+        ld	hl, (SndCardDetectAddr)
+        ld	bc, $30
+        add	hl, bc
+        pop	bc
+        ld	(SndCardDetectAddr), hl
+        jr	DetectSndCardStringInnerLoop
+
+InitMusicPlayer:
+        xor a                                   ; ld a,PSG_STOPPED
+        ld (PSGMusicStatus),a                   ; set music status to PSG_STOPPED
+        ret
+
+StartMusic:
+        ld      a, (SndCardType)
+        cp      a, SndCardNone
+        ret     z
+
+        ld      hl, (MUSIC_DATA_POINTER)
+        ld      (PSGMusicPointer), hl
+        ld      (PSGMusicStart), hl
+        ld      (PSGMusicLoopPoint), hl
+
+        xor     a
+        ld      (PSGMusicSubstringLen), a
+
+        ld      a, 1
+        ld      (PSGMusicStatus), a
+
+        ret
+
+StopMusic:
+        ld      a, (SndCardType)
+        cp      a, SndCardNone
+        ret     z
+
+        xor     a
+        ld      (PSGMusicStatus), a
+
+        call    SndInitChip
+        
+        ret
+
+MusicPlayer_IT:
+        ld      a, (PSGMusicStatus)             ; check if we have got to play a tune
+        or      a
+        ret     z
+
+        ld      a, (PSGMusicSkipFrames)         ; check if we havve got to skip frames
+        or      a
+        jp      nz, LPSGSkipFrame
+  
+        ld      hl, (PSGMusicPointer)           ; read current address
+
+LPSGFrameLoop:
+        ld      b, (hl)                         ; load PSG byte (in B)
+        inc     hl                              ; point to next byte
+        ld      a, (PSGMusicSubstringLen)       ; read substring len
+        or      a
+        jr      z, LPSGProcessCommand           ; check if it is 0 (we are not in a substring)
+        dec     a                               ; decrease len
+        ld      (PSGMusicSubstringLen), a       ; save len
+        jr      nz, LPSGProcessCommand
+        ld      hl, (PSGMusicSubstringRetAddr)  ; substring is over, retrieve return address
+
+LPSGProcessCommand:
+        ld      a, b                            ; copy PSG byte into A
+        cp      a, PSGLatch                     ; is it a latch?
+        jr      nc, LPSGSendToChip              ; if >= $80 then it is a latch
+        cp      a, PSGData                      ; check if it is a data
+        jr      c, LPSGCommand                   ; if < $40 then it is a command
+        
+LPSGSendToChip:
+        ld	a, (SndCardBaseAddr)            ; load port address
+        ld	c, a                             
+
+        out	(c), b                          ; write data to chip
+
+        jp      LPSGFrameLoop
+  
+LPSGSkipFrame:
+        dec     a
+        ld      (PSGMusicSkipFrames), a
+        ret
+
+LPSGCommand:
+        cp      a, PSGWait
+        jr      z, LPSGFrameDone        ; no additional frames
+        jr      c, LPSGOtherCommands    ; other commands?
+        and     a, $07                  ; take only the last 3 bits for skip frames
+        ld      (PSGMusicSkipFrames), a ; we got additional frames
+
+LPSGFrameDone:
+        ld      (PSGMusicPointer), hl   ; save current address
+        ret                             ; frame done
+
+LPSGOtherCommands:
+        cp      a, PSGSubString
+        jr      nc, LPSGSubString
+        cp      a, PSGEnd
+        jr      z, LPSGMusicLoop
+        cp      a, PSGLoop
+        jr      z, LPSGSetLoopPoint
+
+        ; ***************************************************************************
+        ; we should never get here!
+        ; if we do, it means the PSG file is probably corrupted, so we just RET
+        ; ***************************************************************************
+
+        ret
+
+LPSGSetLoopPoint:
+        ld      (PSGMusicLoopPoint), hl
+        jp      LPSGFrameLoop
+
+LPSGSubString:
+        sub     a, PSGSubString-4               ; len is value - $08 + 4
+        ld      (PSGMusicSubstringLen), a       ; save len
+        ld      c, (hl)                         ; load substring address (offset)
+        inc     hl
+        ld      b, (hl)
+        inc     hl
+        ld      (PSGMusicSubstringRetAddr), hl  ; save return address
+        ld      hl, (PSGMusicStart)
+        add     hl, bc                           ; make substring current
+        jp      LPSGFrameLoop
+
+LPSGMusicLoop:
+        ld      hl, (PSGMusicLoopPoint)
+        jp      LPSGFrameLoop
