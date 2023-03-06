@@ -12,7 +12,7 @@ The PSGTVC folder contains the source code of the Z80 assembly player routines. 
 PSGPlayer is a Windows command-line utility to play PSG files using the default wave out device. It can be used to check the quality of converted PSG files.
 
 ## PSDDecompress
-PSGPlayer is a Windows command-line utility to play PSG files using the default wave out device. It can be used to check the quality of converted PSG files.
+PSGDecompress is a small utility to convert compressed PSG files to uncompressed files. It's mostly for debugging purposes, there's no point in unpacking PSG files as they can be played without unpacking.
 
 ## PSG2TXT
 PSG2TXT is another debugging utility. Converts a binary PSG file to a human-readable text file. It can be used to visually check the contents of a PSG file.
