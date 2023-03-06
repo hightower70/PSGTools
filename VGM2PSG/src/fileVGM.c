@@ -191,11 +191,8 @@ bool fileVGMIsBehindLoopStart(void)
 static void fileVGMProcessCommand(void)
 {
 	uint8_t command;
-	uint16_t i;
-	int len;
 	uint16_t word_buffer;
 	uint8_t byte_buffer;
-	uint16_t data_buffer_start_pos;
 
 	l_player_state = VPS_CommandProcessing;
 

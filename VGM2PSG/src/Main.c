@@ -24,6 +24,7 @@ emuSN76489State g_SN76489_state;
 ///////////////////////////////////////////////////////////////////////////////
 // Module global variables
 static int l_psg_frame_step = 44100 / 50;  // default frame rate is 50Hz
+
 static uint8_t l_psg_buffer[FILE_BUFFER_LENGTH];
 static uint8_t l_psg_compressed_buffer[FILE_BUFFER_LENGTH];
 static bool l_insert_length = false;

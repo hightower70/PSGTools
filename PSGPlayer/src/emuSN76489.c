@@ -73,8 +73,8 @@ void emuSN76489Reset(emuSN76489State* in_state)
 void emuSN76496WriteRegister(emuSN76489State* in_state, uint8_t in_data)
 {
 	uint8_t register_index;
-	uint8_t register_value;
-	/*
+/*	uint8_t register_value;
+
 	// determine register value
 	if ((in_data & 0x80) != 0)
 	{

@@ -42,6 +42,10 @@
         ;	% 0011 1nnn - end of frame, wait nnn additional frames(0 - 7)[values 0x38 - 0x3f]
         ;------------------------------------------------------------------------------
 
+
+        ; configuration defines
+PSGFastFreqCalculation  equ     1       ; frequency calculation mode (0 - accurate but slow, 1 - fast and less accurate)
+
         ; Sound card defines
 SndCardNone             equ     0       ; No sound card detected
 SndCardGame             equ     1       ; Game card
@@ -89,7 +93,7 @@ PSGMusicSkipFrames      db    0                 ; the frames we need to skip
 PSGMusicSubstringLen            db      0       ; lenght of the substring we are playing
 PSGMusicSubstringRetAddr        dw      0       ; return to this address when substring is over
 
-        ifndef      FAST_FREQ_CALCULATION
+        if      PSGFastFreqCalculation == 0
 
         ; frequency calculation for 3.125MHz clock (The values can be calculated by x*32*3.125MHz/3.579MHz where x=[0..31])
 FreqMultiplierTable:
@@ -515,7 +519,7 @@ LPSGMusicLoop:
         jp      LPSGFrameLoop
 
 RecalculateAndUpdateFrequency:
-        ifdef      FAST_FREQ_CALCULATION
+        if      PSGFastFreqCalculation != 0
 
         ; calculates frequency register value based on approximation (multiplide by 7/8 which is approx. 3.125MHz/3.579MHz)
         ld      c, l                            ; save register value to BC
