@@ -57,6 +57,42 @@ InitPlayer:
         rst     $30
         db      VID_BKOUT
 
+        ; display 'Playing on '
+        ld      de, PLAYING_ON
+        ld      bc, PLAYING_ON_LENTH
+        rst     $30
+        db      VID_BKOUT
+
+        ; display sound card name
+        ld      a, (SndCardType)
+        cp      a, SndCardGame
+        jr      nz, DisplayNextCard1
+
+        ld      de, GAME_CARD
+        ld      bc, GAME_CARD_LENGTH
+        jr      DisplayCardName
+
+DisplayNextCard1:
+        cp      a, SndCardSndMx
+        jr      nz, DispalyNextCard2
+
+        ld      de, SOUNDMAGIC_CARD
+        ld      bc, SOUNDMAGIC_CARD_LENGTH
+        jr      DisplayCardName
+
+
+DisplayCardName:
+        rst     $30
+        db      VID_BKOUT
+
+DispalyNextCard2:
+
+        ; display 'ESC- Stop'
+        ld      de, ESC_STOP
+        ld      bc, ESC_STOP_LENGTH
+        rst     $30
+        db      VID_BKOUT
+
         ; Initialize music player
         call    InitMusicPlayer
 
@@ -154,12 +190,28 @@ ItVectorSave:
         jp      0        
 
 PSG_PLAYER_TITLE:
-        db      "PSG Music Player v0.1",$0d,$0a,"(c) 2023 Laszlo Arvai", $0d, $0a, "ESC - Stop", $0d, $0a
+        db      "PSG Music Player v0.1",$0d,$0a,"(c) 2023 Laszlo Arvai", $0d, $0a
 PSG_PLAYER_TITLE_LENGTH      equ $ - PSG_PLAYER_TITLE
+
+ESC_STOP:
+        db      "ESC - Stop", $0d, $0a
+ESC_STOP_LENGTH equ $ - ESC_STOP
 
 NO_SOUND_CARD_FOUND: 
         db      "No Sound Card Found. Exiting.", $0d,$0a
 NO_SOUND_CARD_FOUND_LENGTH equ $ - NO_SOUND_CARD_FOUND
+
+PLAYING_ON:
+        db      "Playing on "
+PLAYING_ON_LENTH equ $ - PLAYING_ON
+
+GAME_CARD:
+        db      "GameCard", $0d,$0a
+GAME_CARD_LENGTH equ $ - GAME_CARD
+
+SOUNDMAGIC_CARD:
+        db      "SoundMagic", $0d,$0a
+SOUNDMAGIC_CARD_LENGTH equ $ - SOUNDMAGIC_CARD
 
         include "psgplayer.a80"
 
